@@ -1,0 +1,16 @@
+{
+    "Otodom Prop": {
+        "commands": "cd /home/ccj94/workspace/Real_State_ML_WebScrapping/WebScraper/\nsource .venv/bin/activate\npython WebScrapOtodom.py --property-type dom",
+        "schedule_info": {
+            "day_of_week": "mon",
+            "hour": 19,
+            "minute": 17
+        },
+        "enabled": true
+    },
+    "tkir": {
+        "commands": "cd ~/workspace/invest_rank/\nsource inv_rank_env/bin/activate\npython app.py",
+        "schedule_info": null,
+        "enabled": true
+    }
+}
