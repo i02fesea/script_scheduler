@@ -8,10 +8,14 @@ from PyQt5.QtWidgets import (
     QHeaderView, QDialog, QLineEdit, QFormLayout, QDialogButtonBox, 
     QMessageBox, QCheckBox, QHBoxLayout, QGroupBox, QTimeEdit, QLabel
 )
-from PyQt5.QtCore import QProcess, QTime, Qt
+from PyQt5.QtCore import QProcess, QTime, Qt, QObject, pyqtSignal
 from apscheduler.schedulers.background import BackgroundScheduler
 
 SCRIPTS_FILE = "scripts.json"
+
+class SignalEmitter(QObject):
+    log_signal = pyqtSignal(str, str)
+    run_script_signal = pyqtSignal(str)
 
 class ScheduleDialog(QDialog):
     def __init__(self, parent=None):
@@ -47,12 +51,17 @@ class ScheduleDialog(QDialog):
         }
 
 class RegistrationDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, script_name=None, commands=None):
         super().__init__(parent)
         self.setWindowTitle("Register New Script")
         layout = QFormLayout(self)
-        self.script_name = QLineEdit()
-        self.bash_commands = QTextEdit()
+        self.script_name = QLineEdit(script_name)
+        self.bash_commands = QTextEdit(commands)
+
+        if script_name:
+            self.setWindowTitle("Modify Script")
+            self.script_name.setReadOnly(True)
+
         layout.addRow("Script Name:", self.script_name)
         layout.addRow("Bash Commands:", self.bash_commands)
         self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -95,6 +104,9 @@ class MainWindow(QMainWindow):
 
         self.log_tabs = QTabWidget()
         main_layout.addWidget(self.log_tabs)
+        self.emitter = SignalEmitter()
+        self.emitter.log_signal.connect(self.log_to_tab)
+        self.emitter.run_script_signal.connect(self._run_script_from_thread)
         self.setup_global_log_tab()
         self.load_scripts()
 
@@ -157,11 +169,28 @@ class MainWindow(QMainWindow):
         run_layout.addWidget(stop_button)
         self.script_table.setCellWidget(row_position, 3, run_widget)
 
+        actions_widget = QWidget()
+        actions_layout = QHBoxLayout(actions_widget)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        modify_button = QPushButton("Modify")
+        modify_button.clicked.connect(lambda _, sn=name: self.open_modification_dialog(sn))
         delete_button = QPushButton("Delete")
-        delete_button.clicked.connect(self.handle_delete_button)
-        self.script_table.setCellWidget(row_position, 4, delete_button)
+        delete_button.clicked.connect(lambda _, sn=name: self.handle_delete_button(sn))
+        actions_layout.addWidget(modify_button)
+        actions_layout.addWidget(delete_button)
+        self.script_table.setCellWidget(row_position, 4, actions_widget)
 
         self.add_log_tab(name)
+
+    def open_modification_dialog(self, script_name):
+        script_data = self.scripts.get(script_name)
+        if not script_data:
+            return
+
+        dialog = RegistrationDialog(self, script_name=script_name, commands=script_data['commands'])
+        if dialog.exec_() == QDialog.Accepted:
+            data = dialog.get_data()
+            self.scripts[script_name]['commands'] = data['commands']
 
     def add_log_tab(self, name):
         log_tab_widget = QWidget()
@@ -233,6 +262,12 @@ class MainWindow(QMainWindow):
                     pass
 
     def execute_script(self, script_name):
+        # This function is called by the scheduler in a background thread.
+        # It must not interact with the GUI directly. It only emits a signal.
+        self.emitter.run_script_signal.emit(script_name)
+
+    def _run_script_from_thread(self, script_name):
+        # This function is the slot that runs in the main GUI thread.
         if script_name in self.processes:
             QMessageBox.warning(self, "Warning", f"Script '{script_name}' is already running.")
             return
@@ -240,7 +275,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Executing script: {script_name}...")
         process = QProcess(self)
         process.setProcessChannelMode(QProcess.MergedChannels)
-        process.readyReadStandardOutput.connect(lambda: self.handle_log_output(script_name))
+        process.readyReadStandardOutput.connect(lambda: self.handle_log_output(script_name, process))
         process.finished.connect(lambda: self.handle_process_finished(script_name))
         self.processes[script_name] = process
         commands = self.scripts[script_name]["commands"]
@@ -254,12 +289,10 @@ class MainWindow(QMainWindow):
                     run_widget.findChild(QPushButton, "stop_button").show()
                 break
 
-    def handle_log_output(self, script_name):
-        process = self.processes.get(script_name)
+    def handle_log_output(self, script_name, process):
         if process:
             output = process.readAllStandardOutput().data().decode().strip()
-            self.log_to_tab(script_name, output)
-            self.global_log_tab.append(f"[{script_name}] {output}")
+            self.emitter.log_signal.emit(script_name, output)
 
     def handle_process_finished(self, script_name):
         self.status_bar.showMessage(f"Script '{script_name}' finished.", 5000)
@@ -275,6 +308,7 @@ class MainWindow(QMainWindow):
                 break
 
     def log_to_tab(self, tab_name, message):
+        self.global_log_tab.append(f"[{tab_name}] {message}")
         for i in range(self.log_tabs.count()):
             if self.log_tabs.tabText(i) == tab_name:
                 log_widget = self.log_tabs.widget(i).findChild(QTextEdit)
@@ -282,15 +316,14 @@ class MainWindow(QMainWindow):
                     log_widget.append(message)
                 break
 
-    def handle_delete_button(self):
-        button = self.sender()
-        if button:
-            row = self.script_table.indexAt(button.pos()).row()
-            self.delete_script(row)
+    def handle_delete_button(self, script_name):
+        for row in range(self.script_table.rowCount()):
+            if self.script_table.item(row, 1).text() == script_name:
+                self.delete_script(row, script_name)
+                break
 
-    def delete_script(self, row):
+    def delete_script(self, row, script_name):
         if row < 0 or row >= self.script_table.rowCount(): return
-        script_name = self.script_table.item(row, 1).text()
         reply = QMessageBox.question(self, 'Delete Script', f"Are you sure you want to delete the script '{script_name}'?",
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
