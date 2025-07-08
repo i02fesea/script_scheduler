@@ -13,26 +13,31 @@ This is a GUI application built with PyQt5 for scheduling and executing bash scr
 
 ## How to Run
 
-1.  **Set up the environment**:
+1.  **Install `uv`**:
 
-    It is recommended to use a virtual environment.
-
+    If you don't have `uv` installed, you can install it with:
     ```bash
-    # Install the venv package if you haven't already
-    sudo apt install python3.12-venv
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+    Make sure to follow the instructions to add `uv` to your `PATH`.
 
+2.  **Set up the environment**:
+
+    It is recommended to use a virtual environment. `uv` can create and manage it for you.
+    ```bash
     # Create and activate the virtual environment
-    python3 -m venv .venv
+    uv venv
     source .venv/bin/activate
+    uv venv --python 3.12
     ```
 
-2.  **Install dependencies**:
+3.  **Install dependencies**:
 
     ```bash
-    pip install -r requirements.txt
+    uv pip install -r requirements.txt
     ```
 
-3.  **Run the application**:
+4.  **Run the application**:
 
     ```bash
     python src/main.py
